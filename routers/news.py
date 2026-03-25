@@ -4,7 +4,7 @@ import time
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 
 from config import settings
 
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/news", tags=["news"])
 
 async def verify_slack_signature(
     request: Request,
-    x_slack_timestamp: Annotated[str, Header()],
+    x_slack_request_timestamp: Annotated[str, Header()],
     x_slack_signature: Annotated[str, Header()],
 ) -> None:
     """
@@ -25,11 +25,11 @@ async def verify_slack_signature(
     5분 이상 지난 타임스탬프는 재전송 공격 방지를 위해 거부한다.
     """
     # 5분(300초) 이상 지난 요청 거부 (Replay Attack 방어)
-    if abs(time.time() - float(x_slack_timestamp)) > 300:
+    if abs(time.time() - float(x_slack_request_timestamp)) > 300:
         raise HTTPException(status_code=403, detail="Request timestamp expired")
 
     raw_body = await request.body()
-    sig_basestring = f"v0:{x_slack_timestamp}:{raw_body.decode('utf-8')}"
+    sig_basestring = f"v0:{x_slack_request_timestamp}:{raw_body.decode('utf-8')}"
     computed = "v0=" + hmac.new(
         key=settings.slack_signing_secret.encode(),
         msg=sig_basestring.encode(),
@@ -78,12 +78,9 @@ async def get_news():
 
 @router.post("/slack")
 async def slack_slash_command(
+    request: Request,
     background_tasks: BackgroundTasks,
     _: Annotated[None, Depends(verify_slack_signature)],
-    command: Annotated[str, Form()],
-    response_url: Annotated[str, Form()],
-    user_name: Annotated[str, Form()] = "",
-    text: Annotated[str, Form()] = "",
 ):
     """
     [Phase 2] 슬랙 /ai-news Slash Command 수신 엔드포인트.
@@ -92,7 +89,15 @@ async def slack_slash_command(
     - 즉시 HTTP 200 + ephemeral 메시지 반환 (슬랙 3초 룰 방어)
     - 실제 처리는 BackgroundTasks로 비동기 위임
     """
-    background_tasks.add_task(send_delayed_response, response_url, user_name, text)
+    form = await request.form()
+    response_url = form.get("response_url", "")
+    user_name = str(form.get("user_name", ""))
+    text = str(form.get("text", ""))
+
+    if not response_url:
+        raise HTTPException(status_code=400, detail="response_url is required")
+
+    background_tasks.add_task(send_delayed_response, str(response_url), user_name, text)
 
     return {
         "response_type": "ephemeral",
