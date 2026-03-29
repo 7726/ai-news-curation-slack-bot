@@ -1,20 +1,27 @@
 import hashlib
 import hmac
 import time
+import json
+import time
 from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from tavily import TavilyClient
+from google import genai
+from google.genai import types
 
 from config import settings
 
 router = APIRouter(prefix="/news", tags=["news"])
 
+# API 클라이언트 초기화
+tavily_client = TavilyClient(api_key=settings.tavily_api_key)
+gemini_client = genai.Client(api_key=settings.gemini_api_key)
 
 # ---------------------------------------------------------------------------
 # Slack 서명 검증 의존성
 # ---------------------------------------------------------------------------
-
 async def verify_slack_signature(
     request: Request,
     x_slack_request_timestamp: Annotated[str, Header()],
@@ -43,7 +50,6 @@ async def verify_slack_signature(
 # ---------------------------------------------------------------------------
 # Background Task: 슬랙 response_url로 지연 응답 전송
 # ---------------------------------------------------------------------------
-
 async def send_delayed_response(response_url: str, user_name: str, text: str) -> None:
     """
     슬랙 3초 룰 방어용 BackgroundTask.
