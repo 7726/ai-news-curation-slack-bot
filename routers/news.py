@@ -46,6 +46,59 @@ async def verify_slack_signature(
     if not hmac.compare_digest(computed, x_slack_signature):
         raise HTTPException(status_code=403, detail="Invalid Slack signature")
 
+# ---------------------------------------------------------------------------
+# 외부 API 동기 호출 래퍼 (비동기 Event Loop 블로킹 방지)
+# ---------------------------------------------------------------------------
+def fetch_news_from_tavily(query: str) -> dict:
+    """Tavily API를 사용하여 뉴스 검색 (동기 함수)"""
+    search_query = query if query else "최신 AI 기술 트렌드"
+    return tavily_client.search(
+        query=search_query,
+        search_depth="advanced",
+        max_results=3
+    )
+
+def analyze_news_with_gemini(news_data: dict) -> dict:
+    """Gemini API를 사용하여 뉴스 분석 및 JSON 추출 (동기 함수)"""
+    context_str = "\n".join(
+        [f"- 제목: {result['title']}\n  내용: {result['content']}" for result in news_data.get('results', [])]
+    )
+
+    prompt = f"""
+너는 시니어 AI 뉴스 큐레이터야. 다음 최신 AI 뉴스 데이터를 분석하여 반드시 정해진 JSON 포맷으로만 응답해.
+
+[뉴스 데이터]
+{context_str}
+
+[분석 기준 및 요구사항]
+1. summary_line: AI 한 줄 평
+2. summary_detail: 내용 요약
+3. reliability: 신빙성 분류 (상/중/하) 중 택 1
+4. difficulty: 난이도/진입장벽 (최상/상/중/하/최하) 중 택 1
+5. cost_level: 비용 분류 (상/중/하) 중 택 1
+6. ai_review: AI 최종 후기 및 실현 가능성 체크
+
+[출력 포맷 (반드시 아래 JSON 형태를 유지할 것)]
+{{
+  "summary_line": "한 줄 평",
+  "summary_detail": "요약 내용",
+  "reliability": "상",
+  "difficulty": "중",
+  "cost_level": "하",
+  "ai_review": "최종 리뷰 내용"
+}}
+"""
+    # JSON 출력을 강제하는 config 설정
+    response = gemini_client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.2, # 분석의 일관성을 위해 낮은 온도 설정
+        ),
+    )
+    
+    return json.loads(response.text)
 
 # ---------------------------------------------------------------------------
 # Background Task: 슬랙 response_url로 지연 응답 전송
