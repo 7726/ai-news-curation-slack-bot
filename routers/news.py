@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import time
@@ -97,8 +98,69 @@ def analyze_news_with_gemini(news_data: dict) -> dict:
             temperature=0.2, # 분석의 일관성을 위해 낮은 온도 설정
         ),
     )
+
+    # response.text가 None인지 검증하는 로직
+    if not response.text:
+        # Pylance 타입 에러 해결 및 실제 None 반환 시의 안정성 확보
+        raise ValueError("Gemini API로부터 유효한 텍스트 응답을 받지 못했습니다. (Safety 필터 제한 또는 API 오류)")
     
     return json.loads(response.text)
+
+# ---------------------------------------------------------------------------
+# [Phase 3] Slack Block Kit 렌더러
+# ---------------------------------------------------------------------------
+def build_slack_block_kit(parsed_data: dict, keyword: str) -> dict:
+    """분석된 JSON 데이터를 Slack Block Kit 형태로 변환"""
+    search_keyword = keyword if keyword else "최신 AI 기술 트렌드"
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"📰 큐레이션 완료: {parsed_data.get('summary_line', 'AI 뉴스 업데이트')}",
+                "emoji": True
+            }
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*검색 키워드*: `{search_keyword}`"
+                }
+            ]
+        },
+        {
+            "type": "divider"
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{parsed_data.get('summary_detail', '내용 요약이 없습니다.')}*"
+            }
+        },
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*🔍 신빙성*\n{parsed_data.get('reliability', '알 수 없음')}"},
+                {"type": "mrkdwn", "text": f"*🎓 난이도*\n{parsed_data.get('difficulty', '알 수 없음')}"},
+                {"type": "mrkdwn", "text": f"*💸 예상 비용*\n{parsed_data.get('cost_level', '알 수 없음')}"}
+            ]
+        },
+        {
+            "type": "divider"
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"💡 *AI 큐레이터의 한마디*\n{parsed_data.get('ai_review', '')}"
+            }
+        }
+    ]
+    return {"response_type": "in_channel", "blocks": blocks}
 
 # ---------------------------------------------------------------------------
 # Background Task: 슬랙 response_url로 지연 응답 전송
@@ -108,18 +170,26 @@ async def send_delayed_response(response_url: str, user_name: str, text: str) ->
     슬랙 3초 룰 방어용 BackgroundTask.
     실제 AI 파이프라인(Phase 3)으로 교체 예정.
     """
-    # [Phase 2] Mock 응답 — Phase 3에서 Tavily + Gemini 결과로 교체
-    payload = {
-        "response_type": "in_channel",
-        "text": (
-            f"*[AI 뉴스 큐레이션 - Phase 2 Mock]* 🤖\n"
-            f"<@{user_name}>님, 파이프라인이 곧 완성됩니다!\n"
-            f"입력 키워드: `{text or '없음'}`"
-        ),
-    }
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        await client.post(response_url, json=payload)
+    try:
+        # 1. Tavily 검색 (동기 함수이므로 to_thread를 사용하여 비동기 논블로킹 처리)
+        news_data = await asyncio.to_thread(fetch_news_from_tavily, text)
 
+        # 2. Gemini 분석
+        parsed_data = await asyncio.to_thread(analyze_news_with_gemini, news_data)
+
+        # 3. Block Kit 메시지 생성
+        payload = build_slack_block_kit(parsed_data, text)
+    
+    except Exception as e:
+        # 에러 발생 시 사용자에게 알림
+        payload = {
+            "response_type": "ephemeral",
+            "text": f"❌ 뉴스 큐레이션 중 오류가 발생했습니다: {str(e)}"
+        }
+    
+    # 4. Slack으로 결과 전송
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        await client.post(response_url, json=payload)
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -131,9 +201,8 @@ async def get_news():
     return {
         "status": "ok",
         "message": "AI 뉴스 큐레이션 파이프라인이 곧 여기에 연결됩니다.",
-        "phase": 1,
+        "phase": 3,
     }
-
 
 @router.post("/slack")
 async def slack_slash_command(
