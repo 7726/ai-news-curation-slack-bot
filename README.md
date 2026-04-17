@@ -95,7 +95,7 @@ Gemini API는 아래 6가지 항목을 **JSON 형식**으로 반환하도록 프
 - [x] **Phase 2** — Slack 비동기 연동
   - `/뉴스` Slash Command 수신 및 즉시 200 반환
   - `BackgroundTasks`로 지연 응답 처리
-- [ ] **Phase 3** — AI 파이프라인 결합
+- [x] **Phase 3** — AI 파이프라인 결합
   - Tavily 뉴스 수집 → Gemini 분석 → Slack Block Kit 전송
 - [ ] **Phase 4** — AWS 인프라 및 DynamoDB 연동
   - 기사 URL 해시 기반 중복 방지, Lambda 배포 최종 세팅
